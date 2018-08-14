@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<link rel="stylesheet" href="http://cdnjs.cloudflare.com/ajax/libs/highlight.js/8.2/styles/monokai.min.css">
+	<script src="http://cdnjs.cloudflare.com/ajax/libs/highlight.js/8.2/highlight.min.js"></script>
+	<style>
+		#content {
+			width: 1024px;
+			margin-left: auto;
+			margin-right: auto;
+			font-family: verdana;
+		}
+
+		.section {
+			font-weight: bold;
+			font-size: 12pt;
+		}
+
+		code.ruby { font-size: 1.25em;}
+
+		table.settings_list {
+			width:100%;
+			border-left: 1px solid black;
+			border-top: 1px solid black;
+			border-collapse: collapse;
+		}
+
+		table.settings_list td,th {
+			border-right: 1px solid black;
+			border-bottom: 1px solid black;
+			padding:4px;
+		}
+
+		table.settings_list th {
+			background-color: rgb(223, 223, 223);
+		}
+
+		.symbol {color: #bf79db; background-color: #272822; font-size: 0.95em; padding:4px; text-align: center;}
+
+	</style>
+</head>
+<body>
+<script>hljs.initHighlightingOnLoad();</script>
+<div id="content">
+<h1>DigestHelper</h1>
+<b>Created By:</b> Jason Wells
+
+<h2>Overview</h2>
+The DigestHelper class provides Nuix digest list manipulation to scripts, which is not present in the API (as of 2014/10/23).
+<p>
+Nuix digest lists consist of a 13 byte header, followed by a series of 16 bytes MD5 binary values (not hexadecimal strings!).  The MD5 binary values are sorted and distinct within the list.  To relieve memory pressures when working with large collections of items, this class uses a temporary SQLite db file to track and sort hashes, trading disk space for memory.
+
+<h2>Setup</h2>
+Include the file <i>DigestHelper.rb_</i> along with your script and load it using the following
+<pre><code class="ruby">load "#{File.dirname(__FILE__)}\\DigestHelper.rb_"</code></pre>
+
+<h2>Create a digest list</h2>
+This method will create a digest list based on provided items and a name.  Using the name provided this script save a digest list file to the appropriate Nuix Digest Lists directory.  Note that this will overwrite an existing digest list of the same name if it exists.
+<pre><code class="ruby">items = $current_case.search("flag:audited")
+digest_name = "My Digest"
+DigestHelper.save_list(digest_name,items)</code></pre>
+
+<h2>Create a digest file</h2>
+This method will create a digest list based on provided items and a name.  This differs from save_list because instead of providing a digest list name you provide an actual output file path.  These files won't been seen by Nuix if not saved in an appropriate location.
+<pre><code class="ruby">items = $current_case.search("flag:audited")
+digest_file = "C:\\Digests\\MyDigest.hash"
+DigestHelper.save_file(digest_file,items)</code></pre>
+
+<h2>Merge lists</h2>
+You can merge lists into a new list.
+<pre><code class="ruby">input_digest_names = [
+	"My Digest",
+	"My Other Digest",
+	"Another Digest",
+]
+output_digest_name = "Combined Digest"
+DigestHelper.merge_lists(output_digest_name,input_digest_names)</code></pre>
+
+<h2>Merge files</h2>
+You can merge files into a new file.
+<pre><code class="ruby">input_digest_files = [
+	"C:\\Digests\\My Digest.hash",
+	"C:\\Digests\\My Other Digest.hash",
+	"C:\\Digests\\Another Digest.hash",
+]
+output_digest_file = "C:\\Digests\\Combined Digest.hash"
+DigestHelper.merge_files(output_digest_file,input_digest_files)</code></pre>
+
+<h2>Manual digest manipulation</h2>
+It may be that you have more complex logic to handle than the methods above provide.  You can create an instance of DigestHelper and manipulate it on your own.  Its important to note that hashes associated to a DigestHelper instance do not exist in a digest list file until a method such as save_list or save_file flushes them from the temp SQLite db to a file.
+<pre><code class="ruby">digest = DigestHelper.new</code></pre>
+
+You can add hashes from items
+<pre><code class="ruby">items = $current_case.search("flag:audited")
+digest.add(items)</code></pre>
+
+You can add hashes from a specific digest list
+<pre><code class="ruby">digest_name = "My Digest"
+digest.load_list(digest_name)</code></pre>
+
+You can add hashes from a specific digest list file
+<pre><code class="ruby">digest_file = "C:\\Digests\\My Digest.hash"
+digest.load_file(digest_file)</code></pre>
+
+You can add hashes from a specific digest text file (one per line)
+<pre><code class="ruby">digest_text_file = "C:\\Digests\\My Digest.txt"
+digest.load_text_file(digest_text_file)</code></pre>
+
+You can save the currently tracked hashes to a specific digest list (overwrites existing)
+<pre><code class="ruby">digest_name = "My Digest"
+digest.save_list(digest_name)</code></pre>
+
+You can save the currently tracked hashes to a specific digest list file (overwrites existing)
+<pre><code class="ruby">digest_file = "C:\\Digests\\My Digest.hash"
+digest.save_file(digest_file)</code></pre>
+
+You can save the currently tracked hashes to a specific digest list file (overwrites existing)
+<pre><code class="ruby">digest_text_file = "C:\\Digests\\My Digest.txt"
+digest.save_text_file(digest_text_file)</code></pre>
+
+If you want to know how many hashes are currently tracked
+<pre><code class="ruby">hash_count = digest.size</code></pre>
+
+If you want to iterate the currently tracked hashes (as hexadecimal strings)
+<pre><code class="ruby">digest.each_md5_string do |md5_string|
+	#Use the MD5 string hash here
+end</code></pre>
+
+If you want to iterate the currently tracked hashes (as binary)
+<pre><code class="ruby">digest.each_md5_binary do |md5_bytes|
+	#Use the MD5 bytes hash here
+end</code></pre>
+
+When manually manipulating a DigestHelper instance you are responsible for cleaning up the temporary database it creates by calling cleanup_temp.
+<pre><code class="ruby">items = $current_case.search("flag:audited")
+digest = DigestHelper.new
+digest.add(items)
+digest.save_list("My Digest")
+digest.cleanup_temp</code></pre>
+
+You may find yourself wishing to work a little more efficiently with a rolling digest.  You can create an instance of the digest helper pointing to a specific SQLite db file, notice the call to new is provided a file path to a db file.
+<p>
+This allows you to continually re-use a database file, just don't call "cleanup_temp" (which deletes the db file).
+<p>
+When you're ready to actually use the digest list in Nuix, call "save_list".
+
+<pre><code class="ruby">#==== DAY 1 ====
+#Create an instance of the digest helper, against a specific db file
+digest = DigestHelper.new("C:\\temp\\RollingDigests.db")
+#Obtain some items
+items = $current_case.search("monkey OR frog")
+#Add items
+digest.add(items)
+
+#==== DAY 2 ====
+#Create an instance of the digest helper, against existing db file
+digest = DigestHelper.new("C:\\temp\\RollingDigests.db")
+#Obtain some items
+items = $current_case.search("cat OR dog")
+#Add items
+digest.add(items)
+
+#==== DAY 3 ====
+#-- We need the actual digest list --
+#Create an instance of the digest helper, against existing db file
+digest = DigestHelper.new("C:\\temp\\RollingDigests.db")
+#Save to and overwrite existing digest list
+digest.save_list("Rolling_Digests") #Now there is an actual digest list representing the db contents</code></pre>
+
+You may wonder, why not just append new hashes to the end of the existing digest list?  I believe a part of the specification for a Nuix digest list (based on existing example script) is to have the hashes in the list be unique and sorted.  Appending new hashes to the end of an existing digest list does not ensure either of these conditions, therefore the DigestHelper class always rebuilds a given digest list from scratch when saved.
+
+</div>
+</body>
+</html>

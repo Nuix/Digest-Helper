@@ -1,0 +1,237 @@
+require 'java'
+require 'tmpdir'
+java.sql.DriverManager.registerDriver(org.sqlite.JDBC.new())
+
+class DigestHelper
+	class << self
+		def digests_directory(get_user_level=false)
+			if get_user_level
+				return File.join(java.lang.System.getenv("APPDATA"),"Nuix","Digest Lists")
+			else
+				return 'C:\ProgramData\Nuix\Digest Lists'
+			end
+		end
+
+		def get_digest_path(name)
+			return File.join(digests_directory,"#{name}.hash")
+		end
+
+		def merge_lists(output_name,source_names)
+			merge_files(get_digest_path(output_name),source_names.map{|n|get_digest_path(n)})
+		end
+
+		def merge_files(output_file,source_files)
+			digest = new
+			source_files.each do |source_file|
+				digest.load_file(source_file)
+			end
+			digest.save_file(output_file)
+			digest.cleanup_temp
+		end
+
+		def save_list(name,items)
+			save_file(get_digest_path(name),items)
+		end
+
+		def save_file(file,items)
+			digest = new
+			digest.add(items)
+			digest.save_file(file)
+			digest.cleanup_temp
+		end
+	end
+
+	attr_accessor :db_tmpfile
+
+	def initialize(db_path=nil)
+		@strip_regex = /[^a-f0-9]+/i
+		#Uses provided db_path value or generate a new random path
+		@db_tmpfile = db_path || "#{Dir.tmpdir}\\#{Time.now.strftime("%Y%m%d_%H%M%S")}_tmp.db".gsub("/","\\")
+		puts "Temp db: #{@db_tmpfile}"
+		@iutil = $utilities.getItemUtility
+		with_connection do |connection|
+			statement = connection.prepareStatement("CREATE TABLE IF NOT EXISTS hashes (md5 BLOB)")
+			statement.executeUpdate
+			statement = connection.prepareStatement("CREATE UNIQUE INDEX IF NOT EXISTS idx_md5 ON hashes(md5)")
+			statement.executeUpdate
+		end
+	end
+
+	def add(items,commit_batch_size=100000,&block)
+		#items = @iutil.deduplicate(Array(items))
+		with_connection do |connection|
+			connection.setAutoCommit(false)
+			statement = connection.prepareStatement("INSERT OR IGNORE INTO hashes (md5) VALUES (?)")
+			pending = 0
+			total_commit = 0
+			items.each do |item|
+				md5_string = item.getDigests.getMd5
+				if md5_string.nil? || md5_string.empty?
+					#puts "Invalid MD5 for GUID #{item.getGuid}: #{md5_string}"
+					next
+				end
+				statement.setBytes(1,md5_to_binary(md5_string).to_java_bytes)
+				statement.executeUpdate
+				pending += 1
+				if pending >= commit_batch_size
+					connection.commit
+					total_commit += pending
+					if block_given?
+						block.call(total_commit)
+					end
+					pending = 0
+				end
+			end
+			connection.commit
+			total_commit += pending
+			if block_given?
+				block.call(total_commit)
+			end
+		end
+	end
+
+	def has_hash(md5_string)
+		return false if md5_string.nil? || md5_string.strip.empty?
+		with_connection do |connection|
+			statement = connection.prepareStatement("SELECT COUNT(1) FROM Hashes WHERE md5 = ?")
+			statement.setBytes(1,md5_to_binary(md5_string).to_java_bytes)
+			result_set = statement.executeQuery
+			if !result_set.nil? && result_set.next
+				return result_set.getLong(1) > 0
+			end
+		end
+	end
+
+	def load_file(file)
+		File.open(file,"rb") do |file|
+			#Read off header
+			file.read(13)
+			#Read md5 values
+			with_connection do |connection|
+				connection.setAutoCommit(false)
+				statement = connection.prepareStatement("INSERT OR IGNORE INTO hashes (md5) VALUES (?)")
+				pending = 0
+				while md5_bytes = file.read(16)
+					statement.setBytes(1,md5_bytes.to_java_bytes)
+					statement.executeUpdate
+					pending += 1
+					if pending == 100000
+						connection.commit
+					end
+				end
+				connection.commit
+			end
+		end
+	end
+
+	def save_file(file)
+		File.open(file,"wb") do |file|
+			#Write headers
+			file.write("F2DL")
+			file.write([1].pack('N'))
+			file.write([3].pack('n'))  # length of "MD5"
+			file.write("MD5")
+
+			#Write hashes
+			each_md5_binary do |md5_bytes|
+				file.write(md5_bytes)
+			end
+		end
+	end
+
+	def save_text_file(file)
+		File.open(file,"w") do |file|
+			#Write hashes
+			each_md5_string do |md5_string|
+				file.puts(md5_string)
+			end
+		end
+	end
+
+	def load_text_file(file)
+		File.open(file,"r") do |file|
+			#Read md5 values
+			with_connection do |connection|
+				connection.setAutoCommit(false)
+				statement = connection.prepareStatement("INSERT OR IGNORE INTO hashes (md5) VALUES (?)")
+				pending = 0
+				while line = file.gets
+					statement.setBytes(1,md5_to_binary(line).to_java_bytes)
+					statement.executeUpdate
+					pending += 1
+					if pending == 100000
+						connection.commit
+					end
+				end
+				connection.commit
+			end
+		end
+	end
+
+	def load_list(name)
+		load_file(DigestHelper.get_digest_path(name))
+	end
+
+	def save_list(name)
+		save_file(DigestHelper.get_digest_path(name))
+	end
+
+	def with_connection(&block)
+		connection = java.sql.DriverManager.getConnection("jdbc:sqlite:#{@db_tmpfile}", "", "")
+		yield(connection)
+		connection.close if !connection.nil?
+	end
+
+	def md5_to_binary(md5_string)
+		return Array(md5_string.gsub(@strip_regex,"")).pack('H*')
+	end
+
+	def binary_to_md5(md5_bytes)
+		return md5_bytes.unpack('H*')[0]
+	end
+
+	def cleanup_temp
+		if File.exists?(@db_tmpfile)
+			File.delete(@db_tmpfile)
+			puts "Deleted temp db: #{@db_tmpfile}"
+		else
+			puts "No temp db to delete"
+		end
+	end
+
+	def size
+		size = 0
+		with_connection do |connection|
+			statement = connection.prepareStatement("SELECT COUNT(1) FROM hashes")
+			result_set = statement.executeQuery
+			if !result_set.nil? && result_set.next
+				size = result_set.getLong(1)
+			end
+		end
+		return size
+	end
+	alias :count :size
+
+	def each_md5_string(&block)
+		with_connection do |connection|
+			statement = connection.prepareStatement("SELECT md5 FROM hashes ORDER BY md5 ASC")
+			result_set = statement.executeQuery
+			while result_set.next
+				md5_bytes = result_set.getBytes(1).to_s
+				md5_string = binary_to_md5(md5_bytes)
+				yield md5_string
+			end
+		end
+	end
+
+	def each_md5_binary(&block)
+		with_connection do |connection|
+			statement = connection.prepareStatement("SELECT md5 FROM hashes ORDER BY md5 ASC")
+			result_set = statement.executeQuery
+			while result_set.next
+				md5_bytes = result_set.getBytes(1)
+				yield md5_bytes
+			end
+		end
+	end
+end
