@@ -177,7 +177,11 @@ class DigestHelper
 	end
 
 	def with_connection(&block)
-		connection = java.sql.DriverManager.getConnection("jdbc:sqlite:#{@db_tmpfile}", "", "")
+		if NUIX_VERSION[0].to_i < 9
+			connection = java.sql.DriverManager.getConnection("jdbc:sqlite:#{@db_tmpfile}", "", "")
+		else
+			connection = java.sql.DriverManager.getConnection("jdbc:sqlite:#{@db_tmpfile}")
+		end
 		yield(connection)
 		connection.close if !connection.nil?
 	end
